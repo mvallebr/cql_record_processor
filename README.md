@@ -1,4 +1,4 @@
-cql_copier
+cql_row_processor
 ==========
 
-Python script that copies data from a column family to another in Cassandra, using Python CQL Driver
+Python script that process all rows in a column family one by one, allowing to apply custom logic on it.
