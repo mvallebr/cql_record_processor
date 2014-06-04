@@ -11,7 +11,7 @@ To see how to use it, use --help option:
 ./process_cf.py --help
 ```
 
-When using a module, use --help option on the module:
+When using a module, use --help option on the module to see help specific to the module:
 
 ```
 ./process_cf.py -m module.csv_exporter --help
