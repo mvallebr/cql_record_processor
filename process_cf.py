@@ -60,10 +60,13 @@ def parallel_process(host, workers, step, quiet, keyspace, column_family, limit,
         logging.info("Executing cql query '%s'" % (cql_query))
     st = SimpleStatement(cql_query, consistency_level=ConsistencyLevel.ALL)
     step_rows = []
-
+    total_rows = 0
     for row in session.execute(st):
         step_rows.append(row[:])
         if len(step_rows) >= step:
+            total_rows += len(step_rows)
+            if not quiet:
+                logging.info("Processed %d rows so far" % (total_rows))
             rows = step_rows[:]
             add_task(dump_pool, process_method, rows, host, module_arguments, parsed_args)
             step_rows = []

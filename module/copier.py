@@ -27,7 +27,7 @@ def process(rows, host, module_arguments, parsed_args):
         session = cluster.connect(parsed_args.keyspace)
         session.default_timeout=100
 
-    print "processing..."
+    logging.debug("processing...")
     query_str = ['BEGIN UNLOGGED BATCH']
     params = []
     for row in rows:
@@ -40,9 +40,9 @@ def process(rows, host, module_arguments, parsed_args):
         query = SimpleStatement(query, consistency_level=ConsistencyLevel.ALL)
         session.execute(query, params, timeout=100)
 
-        print "Executed %d inserts" % len(rows)
+        logging.debug("Executed %d inserts" % len(rows) )
     except:
-        print "Exception applying batch %s" % query_str
+        logging.error("Exception applying batch %s" % query_str)
         logging.error("Exception in user code:")
         logging.error('-' * 60)
         e = sys.exc_info()
