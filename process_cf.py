@@ -102,6 +102,7 @@ if __name__ == "__main__":
         logging.info("cf row processor started with %d processes, step = %d" % (args.workers, args.step))
     try:
         process_method = default_process
+        parsed_args = None
         if args.module is not None:
             python_module = import_module(args.module[0])
             logging.info("Module '%s' arguments: '%s' \n" % (args.module[0], str(args.module[1:])))
