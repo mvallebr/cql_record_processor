@@ -92,7 +92,10 @@ if __name__ == "__main__":
                         help="Python Module that contains the process method")
 
     args = parser.parse_args()
-    logging.basicConfig(level=logging.INFO)
+    if not args.quiet:
+        logging.basicConfig(level=logging.INFO)
+    else:
+        logging.basicConfig(level=logging.ERROR)
     workers_semaphore = Semaphore(args.workers)
 
     if not args.quiet:
