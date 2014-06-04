@@ -1,29 +1,38 @@
 import argparse
 import logging
-from multiprocessing import Semaphore
 import sys
 import traceback
 from cassandra import ConsistencyLevel
 from cassandra.cluster import Cluster
 from cassandra.query import SimpleStatement
-from s1base.s1pool import S1Pool
 
 session = None
 
-def process(list_items, host):
+
+def parse_arguments(arguments):
+    global config
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-H", "--host", default="localhost", help="destination cassandra host where to copy the rows to")
+    parser.add_argument("-ks", "--keyspace", default="identification", help="destination keyspace")
+    parser.add_argument("-cf", "--column-family", default="entity_lookup", help="destination column family")
+
+    args = parser.parse_args(arguments)
+
+    return args
+
+def process(rows, host, module_arguments, parsed_args):
     global session
     if not session:
-        keyspace = "identification"
-        cluster = Cluster([host], port=9042, control_connection_timeout=60)
-        session = cluster.connect(keyspace)
+        cluster = Cluster([parsed_args.host], port=9042, control_connection_timeout=60)
+        session = cluster.connect(parsed_args.keyspace)
         session.default_timeout=100
 
     print "processing..."
     query_str = ['BEGIN UNLOGGED BATCH']
     params = []
-    for item in list_items:
+    for row in rows:
         query_str.append("insert into entity_lookup (name, value, entity_id) values(%s, %s, %s)")
-        params.extend([item['name'], item['value'], item['entity_id']])
+        params.extend([row[0], row[1], row[2]])
     query_str.append('APPLY BATCH;')
 
     try:
@@ -31,7 +40,7 @@ def process(list_items, host):
         query = SimpleStatement(query, consistency_level=ConsistencyLevel.ALL)
         session.execute(query, params, timeout=100)
 
-        print "Executed %d inserts" % len(list_items)
+        print "Executed %d inserts" % len(rows)
     except:
         print "Exception applying batch %s" % query_str
         logging.error("Exception in user code:")
