@@ -92,22 +92,19 @@ class CopyService(object):
         self._stmt = {
             'source': u""" -- these ?'s will be filled in automatically
                 SELECT *
-                FROM benchmark.source_data
+                FROM identification.entitylookup
                 WHERE TOKEN(hash_key) > ? AND TOKEN(hash_key) <= ?
             """,
             'dest': u"""  -- these ?'s must be mapped by 'map_fields' below
-                UPDATE benchmark.source_data_copy
-                SET metadata = ?, body = ?
-                WHERE hash_key = ? AND message_id = ?
+                insert into entity_lookup (name, value, entity_id) values(?, ?, ?)
             """
         }
 
     def map_fields(self, source_row):
         return (
-            source_row.metadata,
-            source_row.body,
-            source_row.hash_key,
-            source_row.message_id
+            source_row.name,
+            source_row.value,
+            source_row.entity_id
         )
 
     def update_or_finish(self, _):
