@@ -93,7 +93,7 @@ class CopyService(object):
             'source': u""" -- these ?'s will be filled in automatically
                 SELECT *
                 FROM identification.entitylookup
-                WHERE TOKEN(hash_key) > ? AND TOKEN(hash_key) <= ?
+                WHERE TOKEN(name) > ? AND TOKEN(name) <= ?
             """,
             'dest': u"""  -- these ?'s must be mapped by 'map_fields' below
                 insert into entity_lookup (name, value, entity_id) values(?, ?, ?)
