@@ -14,17 +14,15 @@ import os
 import sys
 import json
 import uuid
-import signal
 import argparse
 import traceback
-from time import time
 import multiprocessing
+from time import time, sleep
 from datetime import datetime
 from collections import deque
-from threading import Event, Lock, Thread
+from threading import Event, Lock
 from multiprocessing import Manager, Process
 
-from pyev import Loop
 from cassandra.cluster import Cluster
 
 from cassandra.policies import (
@@ -65,18 +63,26 @@ class CopyService(object):
             }
         }
 
-        self._source_fetch_size = args.source_fetch_size
-        self._dest_concurrency = args.dest_concurrency
+        self._fetch_size = args.fetch_size
+        self._concurrency = args.concurrency
+        self._dest_token_aware = args.dest_token_aware
+        self._throttle_rate = args.throttle_rate
+        self._worker_count = args.worker_count
 
         self._tokens = tokens
 
+        self._page_rate = (
+            float(self._throttle_rate)
+            / (self._fetch_size * self._worker_count)
+        )
+
         self._cql_cluster = {}
         self._cql_session = {}
-        self._future = {}
+        self._future = None  # source future
 
         self._finished_event = Event()
         self._lock = Lock()
-        self._concurrency = 0
+        self._concurrent_updates = 0
         self._stopped = False
         self._page = 0
         self._row_count = 0
@@ -88,6 +94,24 @@ class CopyService(object):
         self._os_times_stop = None
 
         self._query = {}
+
+        """
+        -- my source_data and source_data_copy tables look like this
+        --
+        -- use your own tables and modify:
+        --     . source stmt
+        --     . dest stmt
+        --     . map_fields method
+        --     . map_routing_key method (if using token_aware option)
+        --
+        CREATE TABLE source_data (
+          hash_key text,
+          message_id timeuuid,
+          body blob,
+          metadata text,
+          PRIMARY KEY (hash_key, message_id)
+        );
+        """
 
         self._stmt = {
             'source': u""" -- these ?'s will be filled in automatically
@@ -101,82 +125,112 @@ class CopyService(object):
         }
 
     def map_fields(self, source_row):
-        return (
+        logger.debug("")
+
+        return (  # return a tuple in the order of the dest ?'s above
             source_row.name,
             source_row.value,
             source_row.entity_id
         )
 
+    def map_routing_key(self, source_row):  # required for token_aware
+        logger.debug("")
+        return (source_row.hash_key,)  # return a tuple of the partition key
+
+    def fetch_now_or_later(self):
+        actual = time() - self._start_time
+        target = self._page / self._page_rate
+
+        logger.debug(
+            "actual: {0}; target: {1}; diff: {2}".format(
+                actual, target, target - actual
+            )
+        )
+
+        if target > actual:  # fetching faster than target?
+            sleep(target - actual)  # sleep until actual == target (overshoot)
+
+        self._future.start_fetching_next_page()  # now fetch
+
     def update_or_finish(self, _):
         logger.debug(
             "len(self._rows): {0}; "
-            "self._concurrency: {1}; ".format(
+            "self._concurrent_updates: {1}; ".format(
                 len(self._rows),
-                self._concurrency
+                self._concurrent_updates
             )
         )
 
         try:
             self._row_count += 1
-            self._concurrency -= 1
+            self._concurrent_updates -= 1
 
             # is work available or queued?
-            if self._future['source'].has_more_pages or self._rows:
-                if (  # is the current row within the latest page?
-                    (self._row_count - 1)
-                    /
-                    self._source_fetch_size
-                    + 1
-                    > self._page
-                ):  # if so, prefetch the next page, overlapping processing
+            if self._future.has_more_pages or self._rows:
+                # is the current row within the latest page?
+                if (self._row_count - 1) / self._fetch_size + 1 > self._page:
+                    # if so, maybe prefetch another page
                     logger.info(
                         'page: {0}; row_count: {1}'.format(
                             self._page, self._row_count
                         )
                     )
 
+                    # is more work available?
+                    if self._future.has_more_pages:
+                        if self._throttle_rate:  # is throttling in effect?
+                            self.fetch_now_or_later()  # maybe delay fetching
+                        else:  # fetch while processing continues async
+                            self._future.start_fetching_next_page()
+
                     self._page += 1
 
-                    # if work is available, start fetching it
-                    if self._future['source'].has_more_pages:
-                        self._future['source'].start_fetching_next_page()
-                if self._rows:  # work is queued
-                    self.update_dest_table()
-            elif self._concurrency:  # work is in progress
-                pass
-            else:  # no work left
+                if self._rows:  # is work queued?
+                    self.update_dest_table()  # process it
+            elif self._concurrent_updates:  # is work in progress?
+                pass  # wait for it
+            else:  # work is all done
                 self.finish()
         except Exception as exc:
             self.stop_and_raise(exc)
 
     def update_dest_table(self):
-        with self._lock:
-            while self._rows:
+        logger.debug("")
+
+        with self._lock:  # called from multiple threads, so use lock
+            while self._rows:  # is work queued?
                 logger.debug(
                     "len(self._rows): {0}; "
-                    "self._concurrency: {1}; "
-                    "self._dest_concurrency: {2}".format(
+                    "self._concurrent_updates: {1}; "
+                    "self._concurrency: {2}".format(
                         len(self._rows),
-                        self._concurrency,
-                        self._dest_concurrency
+                        self._concurrent_updates,
+                        self._concurrency
                     )
                 )
 
-                if self._concurrency >= self._dest_concurrency:
-                    break
-                else:
-                    self._concurrency += 1
+                # are we at the limit of concurrency?
+                if self._concurrent_updates >= self._concurrency:
+                    break  # enough work is in progress
+                else:  # submit more work
+                    self._concurrent_updates += 1
                     row = self._rows.pop()
                     subvars = self.map_fields(row)
 
-                    self._future['dest'] = self._cql_session[
+                    if self._dest_token_aware:
+                        self._query[
+                            'dest'
+                        ].routing_key = self.map_routing_key(row)
+
+                    future = self._cql_session[
                         'dest'
                     ].execute_async(self._query['dest'], subvars)
 
-                    self._future['dest'].add_callback(self.update_or_finish)
-                    self._future['dest'].add_errback(self.stop_and_raise)
+                    future.add_callback(self.update_or_finish)
+                    future.add_errback(self.stop_and_raise)
 
     def stop_and_raise(self, exc):
+        logger.debug("")
         error_msg = 'traceback: {}'.format(traceback.format_exc(exc))
         logger.error(error_msg)
         self.stop()
@@ -186,22 +240,22 @@ class CopyService(object):
         logger.debug(
             "len(new_rows): {0}; "
             "len(self._rows): {1}; "
-            "self._concurrency: {2}; ".format(
+            "self._concurrent_updates: {2}; ".format(
                 len(new_rows),
                 len(self._rows),
-                self._concurrency
+                self._concurrent_updates
             )
         )
 
         try:
-            if new_rows:  # new work has arrived
-                self._rows.extend(new_rows)
-                self.update_dest_table()
-            elif self._rows:  # work is queued
-                self.update_dest_table()
-            elif self._concurrency:  # work is in progress
-                pass
-            else:  # no work left
+            if new_rows:  # is there new work?
+                self._rows.extend(new_rows)  # extend the work queue
+                self.update_dest_table()  # process it
+            elif self._rows:  # is work queued?
+                self.update_dest_table()  # process it
+            elif self._concurrent_updates:  # is work in progress?
+                pass  # wait for it
+            else:  # work is all done
                 self.finish()
         except Exception as exc:
             self.stop_and_raise(exc)
@@ -211,24 +265,25 @@ class CopyService(object):
         self._os_times_start = os.times()
 
         try:
-            logger.debug("self._tokens: {}".format(self._tokens))
+            logger.info("self._tokens: {}".format(self._tokens))
 
-            self._future['source'] = self._cql_session[
+            self._future = self._cql_session[
                 'source'
             ].execute_async(self._query['source'], self._tokens)
 
-            self._future['source'].add_callback(self.more_rows_or_finish)
-            self._future['source'].add_errback(self.stop_and_raise)
+            self._future.add_callback(self.more_rows_or_finish)
+            self._future.add_errback(self.stop_and_raise)
         except Exception as exc:
             self.stop_and_raise(exc)
 
     def stop(self):
+        logger.debug("")
+
         if self._stopped:
             return
 
         self._stop_time = time()
         self._os_times_stop = os.times()
-
         logger.info("Stopping service.")
 
         for source_or_dest in ['source', 'dest']:
@@ -246,14 +301,15 @@ class CopyService(object):
 
                     raise
 
-        logger.info("Stopped.")
-
     def connection(self, source_or_dest):
         params = self._args[source_or_dest]
+
         logger.debug(
             "source_or_dest: {0}; params: {1}".format(
                 source_or_dest,
-                params))
+                params
+            )
+        )
 
         try:
             # defaults
@@ -284,10 +340,10 @@ class CopyService(object):
                 source_or_dest
             ].connect()
 
-            if 'fetch_size' in params:
-                self._cql_session[source_or_dest].default_fetch_size = params[
-                    'fetch_size'
-                ]
+            if source_or_dest == 'source':
+                self._cql_session[
+                    'source'
+                ].default_fetch_size = self._fetch_size
 
             self._query[source_or_dest] = self._cql_session[
                 source_or_dest
@@ -301,38 +357,22 @@ class CopyService(object):
             self.stop()
             raise
 
-        logger.info('Connected to Cassandra {}'.format(source_or_dest))
+        logger.info('Connected to Cassandra - {}'.format(source_or_dest))
 
     def finish(self):
         logger.info("Finished")
         self._finished_event.set()
 
-    def interrupt(self, signal_watcher, libev_events):
-        logger.info("Interrupt")
-        self.finish()
-
-    def set_interrupt(self):
-        ioloop = Loop()
-        sigint_watcher = ioloop.signal(signal.SIGINT, self.interrupt)
-        sigint_watcher.start()
-        ioloop.start()
-
-    def enable_interrupt(self):
-        t = Thread(target=self.set_interrupt)
-        t.daemon = True
-        t.start()
-
     def run(self):
         logger.info("Starting service")
         self.connection('source')
         self.connection('dest')
-        self.enable_interrupt()
         self.select_from_source_table()
         self._finished_event.wait()
         logger.info("Stopping service")
 
 
-def main(args, worker_index, tokens, results):
+def main(args, worker_index, tokens, rate, results):
     logger.info("Initializing...")
     exitcode = 0
 
@@ -445,8 +485,7 @@ def analyze_results(results, os_times_stop, os_times_start):
         os_times_start
     )
 
-    compute = (os_times_diff[2] + os_times_diff[3])
-    cpu = compute / os_times_diff[4]
+    cpu = (os_times_diff[2] + os_times_diff[3]) / os_times_diff[4]
 
     results[99] = {  # add summary results
         'row_count': row_count,
@@ -465,7 +504,7 @@ def analyze_results(results, os_times_stop, os_times_start):
 
 def multiprocess(args):
     token_list = range(
-        TOKEN_LO, TOKEN_HI, TOKEN_SPAN / args.worker_count + 1
+        TOKEN_LO, TOKEN_HI, (TOKEN_SPAN / args.worker_count) + 1
     )
 
     token_list.append(TOKEN_HI)
@@ -475,6 +514,8 @@ def multiprocess(args):
         for i, n in enumerate(token_list[:-1])
     ]
 
+    rate = args.throttle_rate / args.worker_count
+
     multiprocessing.log_to_stderr().setLevel(logging.INFO)
     manager = Manager()
     results = manager.dict()  # create a special shared dict to gather results
@@ -482,9 +523,10 @@ def multiprocess(args):
     workers = [
         Process(
             target=main,
-            args=(args, worker_index, token_tuples[worker_index], results)
+            args=(
+                args, worker_index, token_tuples[worker_index], rate, results
+            )
         )
-
         for worker_index in range(args.worker_count)
     ]
 
@@ -501,46 +543,52 @@ def multiprocess(args):
 
     for worker in workers:
         if worker.exitcode:
-            exitcode = worker.exitcode  # fail fast
+            exitcode = worker.exitcode
+            break  # fail fast
 
-    # transform the special dict
-    results_dict = analyze_results(results, os_times_stop, os_times_start)
+    if results:
+        # transform the special dict
+        results_dict = analyze_results(results, os_times_stop, os_times_start)
 
-    if args.json_output:
-        print_json(args, results_dict)
-    else:
-        print_arguments(args)
-        print_results(results_dict)
+        if args.json_output:
+            print_json(args, results_dict)
+        else:
+            print_arguments(args)
+            print_results(results_dict)
 
     return(exitcode)
 
 
 if __name__ == "__main__":
     description = """
-    Push messages from a RabbitMQ queue into a Cassandra table.
+    Copy/transform rows from one Cassandra table to another in the same or
+    different clusters.
 
     """
 
     parser = argparse.ArgumentParser(description=description)
 
     parser.add_argument(
-        "--source_cql_host_list",
+        "--source-cql-host-list",
         default=['localhost'],
+        dest="source_cql_host_list",
         nargs='*',
         metavar='CQL_HOST',
         help="source: the initial cql hosts to contact (default=['localhost'])"
     )
 
     parser.add_argument(
-        "--source_local_dc",
+        "--source-local-dc",
+        dest="source_local_dc",
         default='',
         help="source: the local datacenter (default='')"
     )
 
     parser.add_argument(
-        "--source_remote_dc_hosts",
+        "--source-remote-dc-hosts",
         type=int,
         default=0,
+        dest="source_remote_dc_hosts",
         help=(
             "source: the number of hosts to be connected to as remote hosts "
             "(default=0)"
@@ -548,14 +596,14 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--source_dc_aware",
+        "--source-dc-aware",
         dest="source_dc_aware",
         action="store_true",
         help="source: favor hosts in the local datacenter (default=False)"
     )
 
     parser.add_argument(
-        "--source_token_aware",
+        "--source-token-aware",
         dest="source_token_aware",
         action="store_true",
         help=(
@@ -565,37 +613,33 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--source_retry",
+        "--source-retry",
         dest="source_retry",
         action="store_true",
         help="source: downgrade consistency level and retry (default=False)"
     )
 
     parser.add_argument(
-        "--source_fetch_size",
-        type=int,
-        default=1000,
-        help="source: the number of rows to fetch in each page (default=1000)"
-    )
-
-    parser.add_argument(
-        "--dest_cql_host_list",
+        "--dest-cql-host-list",
         default=['localhost'],
+        dest="dest_cql_host_list",
         nargs='*',
         metavar='CQL_HOST',
         help="dest: the initial cql hosts to contact (default=['localhost'])"
     )
 
     parser.add_argument(
-        "--dest_local_dc",
+        "--dest-local-dc",
         default='',
+        dest="dest_local_dc",
         help="dest: the local datacenter (default='')"
     )
 
     parser.add_argument(
-        "--dest_remote_dc_hosts",
+        "--dest-remote-dc-hosts",
         type=int,
         default=0,
+        dest="dest_remote_dc_host",
         help=(
             "dest: the number of hosts to be connected to as remote hosts "
             "(default=0)"
@@ -603,14 +647,14 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--dest_dc_aware",
+        "--dest-dc-aware",
         dest="dest_dc_aware",
         action="store_true",
         help="dest: favor hosts in the local datacenter (default=False)"
     )
 
     parser.add_argument(
-        "--dest_token_aware",
+        "--dest-token-aware",
         dest="dest_token_aware",
         action="store_true",
         help=(
@@ -620,16 +664,18 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--dest_retry",
+        "--dest-retry",
         dest="dest_retry",
         action="store_true",
         help="dest: downgrade consistency level and retry (default=False)"
     )
 
     parser.add_argument(
-        "--dest_concurrency",
+        "-c",
+        "--concurrency",
         type=int,
         default=10,
+        dest="concurrency",
         help=(
             "the number of updates to launch concurrently in each process "
             "using callback chaining (default=10)"
@@ -638,9 +684,10 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "-w",
-        "--worker_count",
+        "--worker-count",
         type=int,
         default=2,
+        dest="worker_count",
         help=(
             "the number of asynchronous worker processes to spawn - each "
             "will handle an equal range of partition key tokens (default=2)"
@@ -648,8 +695,29 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
+        "-f",
+        "--fetch-size",
+        type=int,
+        default=1000,
+        dest="fetch_size",
+        help="the number of rows to fetch in each page (default=1000)"
+    )
+
+    parser.add_argument(
+        "-t",
+        "--throttle-rate",
+        type=int,
+        default=1000,
+        dest="throttle_rate",
+        help=(
+            "the aggregate rows per second to target, for unlimited use 0 "
+            "(default=1000)"
+        )
+    )
+
+    parser.add_argument(
         "-j",
-        "--json_output",
+        "--json-output",
         dest="json_output",
         action="store_true",
         help=(
