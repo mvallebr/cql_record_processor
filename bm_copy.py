@@ -135,7 +135,7 @@ class CopyService(object):
 
     def map_routing_key(self, source_row):  # required for token_aware
         logger.debug("")
-        return (source_row.hash_key,)  # return a tuple of the partition key
+        return (source_row.name,)  # return a tuple of the partition key
 
     def fetch_now_or_later(self):
         actual = time() - self._start_time
