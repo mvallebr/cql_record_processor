@@ -96,7 +96,7 @@ class CopyService(object):
                 WHERE TOKEN(name) > ? AND TOKEN(name) <= ?
             """,
             'dest': u"""  -- these ?'s must be mapped by 'map_fields' below
-                insert into entity_lookup (name, value, entity_id) values(?, ?, ?)
+                insert into identification.entity_lookup (name, value, entity_id) values(?, ?, ?)
             """
         }
 
