@@ -35,6 +35,8 @@ if __name__ == "__main__":
         range_msg = json.loads(m.get_body())
         range = [range_msg['start'], range_msg['end']]
         try:
+            args.token_hi = range_msg['start']
+            args.token_lo = range_msg['end']
             result = multiprocess(args)
             if result == 0:
                 print "ENDED PROCESSING - Message %s was processed ok and will be deleted" % str(range)
