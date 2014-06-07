@@ -550,8 +550,17 @@ def multiprocess(args):
             print_results(results_dict)
  
     return(exitcode)
-
-def add_bm_copy_arguments(parser):
+ 
+ 
+if __name__ == "__main__":
+    description = """
+    Copy/transform rows from one Cassandra table to another in the same or
+    different clusters.
+    
+    """
+ 
+    parser = argparse.ArgumentParser(description=description)
+ 
     parser.add_argument(
         "--source-cql-host-list",
         default=['localhost'],
@@ -563,14 +572,14 @@ def add_bm_copy_arguments(parser):
             "(default = ['localhost'])"
         )
     )
-
+ 
     parser.add_argument(
         "--source-dc-aware",
         dest="source_dc_aware",
         action="store_true",
         help="source: favor hosts in the local datacenter (default = False)"
     )
-
+ 
     parser.add_argument(
         "--source-local-dc",
         dest="source_local_dc",
@@ -580,7 +589,7 @@ def add_bm_copy_arguments(parser):
             "(default = 'datacenter1')"
         )
     )
-
+ 
     parser.add_argument(
         "--source-remote-dc-hosts",
         type=int,
@@ -591,7 +600,7 @@ def add_bm_copy_arguments(parser):
             "remote hosts (default = 0)"
         )
     )
-
+ 
     parser.add_argument(
         "--source-token-aware",
         dest="source_token_aware",
@@ -601,14 +610,14 @@ def add_bm_copy_arguments(parser):
             "partition keys (default = False)"
         )
     )
-
+ 
     parser.add_argument(
         "--source-retry",
         dest="source_retry",
         action="store_true",
         help="source: downgrade consistency level and retry (default = False)"
     )
-
+ 
     parser.add_argument(
         "--dest-cql-host-list",
         default=['localhost'],
@@ -620,14 +629,14 @@ def add_bm_copy_arguments(parser):
             "(default = ['localhost'])"
         )
     )
-
+ 
     parser.add_argument(
         "--dest-dc-aware",
         dest="dest_dc_aware",
         action="store_true",
         help="dest: favor hosts in the local datacenter (default = False)"
     )
-
+ 
     parser.add_argument(
         "--dest-local-dc",
         default='datacenter1',
@@ -637,7 +646,7 @@ def add_bm_copy_arguments(parser):
             "(default = 'datacenter1')"
         )
     )
-
+ 
     parser.add_argument(
         "--dest-remote-dc-hosts",
         type=int,
@@ -648,7 +657,7 @@ def add_bm_copy_arguments(parser):
             "remote hosts (default = 0)"
         )
     )
-
+ 
     parser.add_argument(
         "--dest-token-aware",
         dest="dest_token_aware",
@@ -658,14 +667,14 @@ def add_bm_copy_arguments(parser):
             "partition keys (default = False)"
         )
     )
-
+ 
     parser.add_argument(
         "--dest-retry",
         dest="dest_retry",
         action="store_true",
         help="dest: downgrade consistency level and retry (default = False)"
     )
-
+ 
     parser.add_argument(
         "--token-hi",
         type=int,
@@ -676,7 +685,7 @@ def add_bm_copy_arguments(parser):
             "split among worker processes (default = 2 ** 63 - 1)"
         )
     )
-
+ 
     parser.add_argument(
         "--token-lo",
         type=int,
@@ -687,7 +696,7 @@ def add_bm_copy_arguments(parser):
             "split among worker processes (default = -2 ** 63)"
         )
     )
-
+ 
     parser.add_argument(
         "-c",
         "--concurrency",
@@ -699,7 +708,7 @@ def add_bm_copy_arguments(parser):
             "using callback chaining (default = 50)"
         )
     )
-
+ 
     parser.add_argument(
         "-w",
         "--worker-count",
@@ -711,7 +720,7 @@ def add_bm_copy_arguments(parser):
             "will handle an equal range of partition key tokens (default = 2)"
         )
     )
-
+ 
     parser.add_argument(
         "-f",
         "--fetch-size",
@@ -720,7 +729,7 @@ def add_bm_copy_arguments(parser):
         dest="fetch_size",
         help="the number of rows to fetch in each page (default = 1000)"
     )
-
+ 
     parser.add_argument(
         "-t",
         "--throttle-rate",
@@ -732,7 +741,7 @@ def add_bm_copy_arguments(parser):
             "for unlimited use 0 (default = 1000)"
         )
     )
-
+ 
     parser.add_argument(
         "-j",
         "--json-output",
@@ -743,7 +752,7 @@ def add_bm_copy_arguments(parser):
             "(default = False)"
         )
     )
-
+ 
     parser.set_defaults(source_dc_aware=False)
     parser.set_defaults(source_token_aware=False)
     parser.set_defaults(source_retry=False)
@@ -752,16 +761,4 @@ def add_bm_copy_arguments(parser):
     parser.set_defaults(dest_retry=False)
     parser.set_defaults(json_output=False)
     args = parser.parse_args(args=sys.argv[1:])
-    return args
- 
-if __name__ == "__main__":
-    description = """
-    Copy/transform rows from one Cassandra table to another in the same or
-    different clusters.
-    
-    """
- 
-    parser = argparse.ArgumentParser(description=description)
-    args = add_bm_copy_arguments(parser)
-
     sys.exit(multiprocess(args))
