@@ -35,8 +35,7 @@ if __name__ == "__main__":
         range_msg = json.loads(m.get_body())
         range = [range_msg['start'], range_msg['end']]
         try:
-            #result = multiprocess(args)
-            result = 0
+            result = multiprocess(args)
             if result == 0:
                 print "ENDED PROCESSING - Message %s was processed ok and will be deleted" % str(range)
                 boto_queue.delete_message(m)
