@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 import argparse
 import json
+from os import environ
 import traceback
 from boto.sqs.connection import SQSConnection
 import sys
@@ -9,8 +10,8 @@ from bm_copy import multiprocess, add_bm_copy_arguments
 
 __author__ = 'mvalle'
 
-AWS_ACCESS_ID = "AKIAJBWUTS5FGZGEWN2Q"
-AWS_ACCESS_SECRET_KEY = "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"
+AWS_ACCESS_ID = environ['AWS_ACCESS_ID']
+AWS_ACCESS_SECRET_KEY = environ['AWS_ACCESS_SECRET_KEY']
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@
 import argparse
 import base64
 import json
+from os import environ
 from boto.sqs.connection import SQSConnection
 from boto.sqs.message import Message
 
@@ -10,8 +11,8 @@ __author__ = 'mvalle'
 
 DEFAULT_TOKEN_HI = 2 ** 63 - 1
 DEFAULT_TOKEN_LO = -2 ** 63
-AWS_ACCESS_ID = "AKIAJBWUTS5FGZGEWN2Q"
-AWS_ACCESS_SECRET_KEY = "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"
+AWS_ACCESS_ID = environ['AWS_ACCESS_ID']
+AWS_ACCESS_SECRET_KEY = environ['AWS_ACCESS_SECRET_KEY']
 
 def calculate_ranges(token_hi, token_lo, number_of_pieces):
     step = ((token_hi - token_lo) / number_of_pieces) + 1

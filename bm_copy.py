@@ -167,7 +167,7 @@ class CopyService(object):
                 # is the current row within the latest page?
                 if (self._row_count - 1) / self._fetch_size + 1 > self._page:
                     # if so, maybe prefetch another page
-                    logger.info(
+                    logger.debug(
                         'page: {0}; row_count: {1}'.format(
                             self._page, self._row_count
                         )
@@ -354,7 +354,7 @@ class CopyService(object):
             self.stop()
             raise
  
-        logger.info('Connected to Cassandra - {}'.format(source_or_dest))
+        #logger.info('Connected to Cassandra - {}'.format(source_or_dest))
  
     def finish(self):
         logger.info("Finished")
