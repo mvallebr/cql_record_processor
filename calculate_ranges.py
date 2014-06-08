@@ -25,14 +25,19 @@ def calculate_ranges(token_hi, token_lo, number_of_pieces):
 
 messages = []
 msg_count = 0
+
+def commit_sqs(boto_queue):
+    global messages
+    boto_queue.write_batch(messages)
+    messages = []
+
 def send_sqs_msg(msg, boto_queue, use_batch=True):
     if use_batch:
         global messages, msg_count
         messages.append((str(msg_count), base64.b64encode(json.dumps(msg)), 0))
         msg_count += 1
         if msg_count % 10 == 0:
-            boto_queue.write_batch(messages)
-            messages = []
+            commit_sqs(boto_queue)
     else:
         m = Message()
         m.set_body(json.dumps(msg))
@@ -60,5 +65,6 @@ if __name__ == "__main__":
         if args.queue is not None:
             msg = {'start': r[0], 'end': r[1]}
             send_sqs_msg(msg, boto_queue)
+    commit_sqs(boto_queue)
 
 
